@@ -1,0 +1,113 @@
+version: "3.9"
+
+# Todo lo que corre local. Las bases de datos NO están aquí —viven en
+# Supabase (ver CONTEXT.md sección 2 y cada .env.example de servicio).
+
+services:
+  event-bus:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://event-bus:6379/0
+      - PREFECT_API_URL=http://orchestrator:4200
+    depends_on:
+      - event-bus
+
+  accounts-service:
+    build:
+      context: .
+      dockerfile: services/accounts-service/Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - REDIS_URL=redis://event-bus:6379/0
+    depends_on:
+      - event-bus
+
+  accounts-service-worker:
+    build:
+      context: .
+      dockerfile: services/accounts-service/Dockerfile
+    command: ["python", "-m", "app.events_worker"]
+    environment:
+      - REDIS_URL=redis://event-bus:6379/0
+    depends_on:
+      - event-bus
+
+  risk-service:
+    build:
+      context: .
+      dockerfile: services/risk-service/Dockerfile
+    ports:
+      - "8002:8000"
+    environment:
+      - REDIS_URL=redis://event-bus:6379/0
+    depends_on:
+      - event-bus
+
+  risk-service-worker:
+    build:
+      context: .
+      dockerfile: services/risk-service/Dockerfile
+    command: ["python", "-m", "app.events_worker"]
+    environment:
+      - REDIS_URL=redis://event-bus:6379/0
+    depends_on:
+      - event-bus
+
+  clearing-service:
+    build:
+      context: .
+      dockerfile: services/clearing-service/Dockerfile
+    ports:
+      - "8003:8000"
+    environment:
+      - REDIS_URL=redis://event-bus:6379/0
+    depends_on:
+      - event-bus
+
+  clearing-service-worker:
+    build:
+      context: .
+      dockerfile: services/clearing-service/Dockerfile
+    command: ["python", "-m", "app.events_worker"]
+    environment:
+      - REDIS_URL=redis://event-bus:6379/0
+    depends_on:
+      - event-bus
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    ports:
+      - "4200:4200"
+    environment:
+      - REDIS_URL=redis://event-bus:6379/0
+      - ACCOUNTS_URL=http://accounts-service:8000
+      - RISK_URL=http://risk-service:8000
+      - CLEARING_URL=http://clearing-service:8000
+      - STEP_DELAY_MS=3000
+    depends_on:
+      - event-bus
+      - accounts-service
+      - risk-service
+      - clearing-service
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_GATEWAY_URL=http://localhost:8000
+    depends_on:
+      - gateway
