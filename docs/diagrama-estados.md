@@ -1,8 +1,19 @@
 # Diagrama de la máquina de estados — Saga de Transferencia
 
 Pedido explícitamente en la rúbrica ("diagramas de flujo completos", Criterio 6).
-Versión Mermaid del diagrama de CONTEXT.md — pégenlo en el README o en el
-documento final; GitHub lo renderiza solo.
+
+![Máquina de estados de la Saga](./diagrama-estados.png)
+
+Fuente editable en `diagrama-estados.dot` (Graphviz) — para regenerar el PNG/SVG
+tras cambiar un estado o una compensación:
+
+```bash
+dot -Tpng -Gdpi=200 docs/diagrama-estados.dot -o docs/diagrama-estados.png
+dot -Tsvg docs/diagrama-estados.dot -o docs/diagrama-estados.svg
+```
+
+También queda la versión Mermaid abajo por si prefieren pegarla directo en el
+README (GitHub la renderiza sola, sin necesitar el PNG):
 
 ```mermaid
 stateDiagram-v2

@@ -86,7 +86,8 @@ PENDIENTE → DEBITADO → RIESGO_OK → LIQUIDADO → CONFIRMADO
 
 - Idempotencia: header `X-Idempotency-Key` (UUID v4), generado por el Gateway, propagado a todos los servicios.
 - Delay configurable por paso: variable de entorno `STEP_DELAY_MS` (rango 2000–4000).
-- Nombres de servicio sugeridos en `docker-compose.yml`: `gateway`, `orchestrator`, `accounts-service`, `risk-service`, `clearing-service`, `event-bus`, `frontend`. Las bases de datos viven en Supabase (no en el compose): un proyecto o esquema por servicio (`accounts`, `risk`, `clearing`), con su connection string propia en el `.env` de cada servicio.
+- Nombres de servicio sugeridos en `docker-compose.yml`: `gateway`, `prefect-server` (UI en :4200), `orchestrator` (bridge propio en :8010 — no confundir con el puerto de Prefect), `accounts-service`, `risk-service`, `clearing-service`, `event-bus`, `frontend`. Las bases de datos viven en Supabase (no en el compose): un proyecto o esquema por servicio (`accounts`, `risk`, `clearing`), con su connection string propia en el `.env` de cada servicio.
+- `PREFECT_API_URL` (en el contenedor `orchestrator`) apunta a `prefect-server`, y es lo que hace que cada `@flow`/`@task` reporte sus estados al Prefect UI. No confundirlo con `ORCHESTRATOR_URL` (en el `gateway`), que es el bridge HTTP propio hacia `orchestrator:8010` — dos cosas distintas con nombres parecidos.
 - Estados finales válidos: `CONFIRMADO`, `RECHAZADO_FONDOS`, `RECHAZADO_RIESGO`, `RECHAZADO_RED`.
 
 ## 5. Matriz de casos de prueba (marcar al validar cada uno)

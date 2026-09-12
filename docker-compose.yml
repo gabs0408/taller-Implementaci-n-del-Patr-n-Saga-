@@ -17,7 +17,7 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://event-bus:6379/0
-      - PREFECT_API_URL=http://orchestrator:4200
+      - ORCHESTRATOR_URL=http://orchestrator:8010
     depends_on:
       - event-bus
 
@@ -84,20 +84,36 @@ services:
     depends_on:
       - event-bus
 
+  # Servidor real de Prefect: API + base de datos de runs + UI.
+  # Sin esto, @flow/@task corren igual (Prefect arranca un modo "ephemeral"
+  # en memoria) pero NO hay ningún dashboard donde verlos — y el Prefect UI
+  # es justo lo que pide el Criterio 3 (Observabilidad, 15%).
+  prefect-server:
+    image: prefecthq/prefect:2-python3.12
+    command: ["prefect", "server", "start", "--host", "0.0.0.0"]
+    ports:
+      - "4200:4200"   # UI: http://localhost:4200
+    volumes:
+      - prefect-data:/root/.prefect
+
   orchestrator:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
     ports:
-      - "4200:4200"
+      - "8010:8010"   # bridge propio (Gateway -> aquí), NO es el puerto de Prefect
     environment:
       - REDIS_URL=redis://event-bus:6379/0
       - ACCOUNTS_URL=http://accounts-service:8000
       - RISK_URL=http://risk-service:8000
       - CLEARING_URL=http://clearing-service:8000
       - STEP_DELAY_MS=3000
+      # Esto es lo que hace que cada @flow/@task reporte sus estados al
+      # servidor real de Prefect (y por lo tanto aparezcan en :4200).
+      - PREFECT_API_URL=http://prefect-server:4200/api
     depends_on:
       - event-bus
+      - prefect-server
       - accounts-service
       - risk-service
       - clearing-service
@@ -111,3 +127,6 @@ services:
       - VITE_GATEWAY_URL=http://localhost:8000
     depends_on:
       - gateway
+
+volumes:
+  prefect-data:

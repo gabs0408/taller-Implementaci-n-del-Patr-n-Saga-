@@ -4,6 +4,8 @@
   TransferenciaFallida -> revertir() -> publica CompensacionEjecutada
 """
 from common.events import consumir, publicar
+from common.models import RIESGO_OK
+from common.status_store import set_estado
 
 from . import core
 
@@ -11,6 +13,8 @@ from . import core
 def on_saldo_debitado(payload: dict) -> None:
     resultado = core.validar(payload["transfer_id"], payload["cuenta_origen"], payload["monto"], payload.get("simulacion"))
     if resultado["ok"]:
+        # Diagrama: DEBITADO -> RIESGO_OK.
+        set_estado(payload["transfer_id"], RIESGO_OK)
         publicar("RiesgoAprobado", {**payload})
     else:
         publicar("RiesgoRechazado", {**payload, "motivo": resultado["motivo"]})

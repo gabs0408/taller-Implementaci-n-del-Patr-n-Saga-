@@ -47,7 +47,9 @@ docker compose up --build
 
 Esto levanta: `event-bus` (Redis), `gateway` (:8000), los 3
 microservicios (:8001-8003) + su worker de eventos cada uno,
-`orchestrator` (:4200) y `frontend` (:5173).
+`prefect-server` — **Prefect UI en http://localhost:4200** —,
+`orchestrator` (bridge propio, :8010, no confundir con el puerto de
+Prefect) y `frontend` (:5173).
 
 Probar el camino feliz sin el frontend (Fase 0, primer caso exitoso):
 
@@ -83,8 +85,11 @@ connection strings reales.
 - **Fase 1:** conectar Supabase en los 3 servicios (hoy en memoria).
 - **Fase 2:** mover el orquestador a un deployment real de Prefect
   (hoy corre el flow en un hilo dentro de `orchestrator/api.py`).
-- **Fase 4:** exponer el Prefect UI y/o un dashboard propio leyendo
-  la bitácora (`GET /transferencias/{id}` ya la expone en crudo).
+- **Fase 4:** el Prefect UI ya está expuesto (http://localhost:4200,
+  ahí van a ver los delays y las compensaciones de la Orquestación paso
+  a paso). Falta un equivalente para Coreografía — hoy solo tienen
+  `GET /transferencias/{id}` en crudo; un dashboard propio que lo lea
+  y lo muestre igual de bien está en la Fase 4.
 - **Fase 5:** botón de reintento en el frontend que reuse el mismo
   `X-Idempotency-Key` (para demostrar CP-05 desde la UI).
 - **Fase 6:** completar `tests/test_cp_matrix.py` (están con `skip`

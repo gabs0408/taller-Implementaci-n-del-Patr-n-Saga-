@@ -11,9 +11,12 @@ from common.events import publicar
 from common.models import TransferRequest
 from common.status_store import registrar_paso, set_estado
 
-PREFECT_API_URL = os.environ.get("PREFECT_API_URL", "http://orchestrator:4200")
-# TODO (Fase 2 / Persona A): reemplazar por la URL real del deployment
-# de Prefect (`prefect deployment run ...`) una vez creado.
+# Puente propio hacia el contenedor `orchestrator` — NO es la API de
+# Prefect (esa es PREFECT_API_URL, que usa el propio `orchestrator` para
+# reportar los flow/task runs al servidor de Prefect; ver docker-compose.yml).
+ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://orchestrator:8010")
+# TODO (Fase 2 / Persona A): reemplazar por `prefect deployment run ...`
+# contra la API de Prefect, una vez tengan un work pool configurado.
 ORCHESTRATOR_TRIGGER_PATH = "/run-transferencia"
 
 
@@ -35,7 +38,7 @@ def dispatch(transfer_id: str, req: TransferRequest) -> None:
         # flow corra como Prefect deployment, cambiar por una llamada a
         # la API de Prefect (`PREFECT_API_URL`).
         try:
-            httpx.post(f"{PREFECT_API_URL}{ORCHESTRATOR_TRIGGER_PATH}", json=payload, timeout=5)
+            httpx.post(f"{ORCHESTRATOR_URL}{ORCHESTRATOR_TRIGGER_PATH}", json=payload, timeout=5)
         except httpx.HTTPError as exc:
             registrar_paso(transfer_id, "dispatch_orquestador", "error", {"error": str(exc)})
     else:

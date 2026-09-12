@@ -15,7 +15,7 @@ Secuencia que este worker implementa (ver CONTEXT.md sección 3):
   LiquidacionConfirmada   -> acreditar(destino) -> estado CONFIRMADO
 """
 from common.events import consumir, publicar
-from common.models import CONFIRMADO, RECHAZADO_FONDOS, RECHAZADO_RIESGO, RECHAZADO_RED
+from common.models import CONFIRMADO, DEBITADO, RECHAZADO_FONDOS, RECHAZADO_RIESGO, RECHAZADO_RED
 from common.status_store import set_estado
 
 from . import core
@@ -25,6 +25,9 @@ def on_transferencia_solicitada(payload: dict) -> None:
     transfer_id = payload["transfer_id"]
     resultado = core.debitar(transfer_id, payload["cuenta_origen"], payload["monto"], payload.get("simulacion"))
     if resultado["ok"]:
+        # Diagrama: PENDIENTE -> DEBITADO. Hay que escribirlo aquí explícitamente
+        # (core.debitar solo registra el paso en la bitácora, no el estado).
+        set_estado(transfer_id, DEBITADO)
         publicar("SaldoDebitado", {**payload})
     else:
         # CP-02: nada que compensar todavía.

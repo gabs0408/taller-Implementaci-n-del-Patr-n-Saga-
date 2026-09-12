@@ -1,0 +1,90 @@
+digraph Arquitectura {
+    rankdir=LR;
+    compound=true;
+    bgcolor="#f7f9f1";
+    fontname="Helvetica";
+    labelloc="t";
+    fontsize=17;
+    label=<<b>NovaBank Saga — Arquitectura de contenedores</b><br/><font point-size="10">verde = modo Orquestación · dorado = modo Coreografía · gris = compartido por ambos · azul = reporte a Prefect</font>>;
+
+    node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#eef1e7", color="#5c6b6a"];
+    edge [fontname="Helvetica", fontsize=9.5];
+
+    subgraph cluster_cliente {
+        label="Cliente";
+        style=dashed; color="#5c6b6a"; fontsize=11;
+        Frontend [label="Frontend\n(React + Vite)\n— Fase 5 —"];
+    }
+
+    subgraph cluster_backend {
+        label="Backend — docker-compose";
+        style=dashed; color="#5c6b6a"; fontsize=11;
+
+        Gateway      [label="API Gateway\n— Fase 1 —"];
+        Orchestrator [label="Orchestrator\nbridge propio :8010\n(corre el flow)\n— Fase 2 —"];
+
+        subgraph cluster_accounts {
+            label="accounts-service"; style="rounded"; color="#8a978f"; fontsize=10;
+            AccountsAPI    [label="API REST\n/cuentas/*"];
+            AccountsWorker [label="Worker\n(eventos)"];
+        }
+        subgraph cluster_risk {
+            label="risk-service"; style="rounded"; color="#8a978f"; fontsize=10;
+            RiskAPI    [label="API REST\n/riesgo/*"];
+            RiskWorker [label="Worker\n(eventos)"];
+        }
+        subgraph cluster_clearing {
+            label="clearing-service"; style="rounded"; color="#8a978f"; fontsize=10;
+            ClearingAPI    [label="API REST\n/pasarela/*"];
+            ClearingWorker [label="Worker\n(eventos)"];
+        }
+    }
+
+    subgraph cluster_infra {
+        label="Infraestructura compartida";
+        style=dashed; color="#5c6b6a"; fontsize=11;
+        Redis [label="Redis\nbus de eventos +\nbitácora de estado", shape=cylinder, fillcolor="#e4e8df"];
+        PrefectServer [label="Prefect Server\nUI :4200", fillcolor="#dde6ee", color="#3d6b8c"];
+    }
+
+    Equipo [label="Equipo\n(navegador — Fase 4)", shape=box, style="rounded,filled", fillcolor="#f2f0e6", color="#5c6b6a"];
+
+    subgraph cluster_datos {
+        label="Datos (Supabase) — Fase 1, TODO";
+        style=dashed; color="#5c6b6a"; fontsize=11;
+        DBAccounts [label="DB cuentas", shape=cylinder, fillcolor="#f3e6e1"];
+        DBRisk     [label="DB riesgo", shape=cylinder, fillcolor="#f3e6e1"];
+        DBClearing [label="DB liquidación", shape=cylinder, fillcolor="#f3e6e1"];
+    }
+
+    // --- Cliente <-> Gateway (siempre) ---
+    Frontend -> Gateway [dir=both, color="#171310", penwidth=1.4,
+        label="POST /transferencias\nGET /transferencias/{id}  (polling)"];
+
+    // --- modo Orquestación (verde) ---
+    Gateway -> Orchestrator [color="#2f6f5c", penwidth=2, label="modo=orquestacion"];
+    Orchestrator -> AccountsAPI [color="#2f6f5c", penwidth=1.6, label="llamadas REST\n(débito / reversa)"];
+    Orchestrator -> RiskAPI     [color="#2f6f5c", penwidth=1.6, label="llamadas REST"];
+    Orchestrator -> ClearingAPI [color="#2f6f5c", penwidth=1.6, label="llamadas REST"];
+
+    // --- modo Coreografía (dorado) ---
+    Gateway -> Redis [color="#a8792c", penwidth=2, label="modo=coreografia\npublica TransferenciaSolicitada"];
+    Redis -> AccountsWorker [color="#a8792c", penwidth=1.6, dir=both, arrowtail=none, label="consume / publica\neventos"];
+    Redis -> RiskWorker     [color="#a8792c", penwidth=1.6, dir=both, arrowtail=none, label="consume / publica"];
+    Redis -> ClearingWorker [color="#a8792c", penwidth=1.6, dir=both, arrowtail=none, label="consume / publica"];
+
+    // --- bitácora compartida (gris, ambos modos) ---
+    Gateway -> Redis [ltail=cluster_backend, color="#5c6b6a", style=dotted, penwidth=1.3,
+        label="set_estado() / registrar_paso()\n— ambos modos —"];
+
+    // --- reporte a Prefect (azul, solo Orquestación) ---
+    Orchestrator -> PrefectServer [color="#3d6b8c", penwidth=1.6, style=dashed,
+        label="PREFECT_API_URL\nreporta flow/task runs"];
+    Equipo -> PrefectServer [color="#3d6b8c", penwidth=1.2, style=dotted, dir=both,
+        label="abre el dashboard\n(ve delays y compensaciones)"];
+
+    // --- persistencia de negocio (aún TODO) ---
+    AccountsAPI -> DBAccounts [lhead=cluster_datos, ltail=cluster_accounts, color="#9c4530", style=dashed, label="Supabase (TODO)"];
+    RiskAPI -> DBRisk         [ltail=cluster_risk, color="#9c4530", style=dashed];
+    ClearingAPI -> DBClearing [ltail=cluster_clearing, color="#9c4530", style=dashed];
+}

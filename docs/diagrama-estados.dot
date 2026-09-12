@@ -1,0 +1,41 @@
+digraph SagaTransferencia {
+    rankdir=TB;
+    bgcolor="#f7f9f1";
+    fontname="Helvetica";
+    fontsize=13;
+    labelloc="t";
+    label=<<b>Máquina de estados — Saga de Transferencia (NovaBank)</b>>;
+
+    node [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", margin="0.22,0.14"];
+    edge [fontname="Helvetica", fontsize=10.5, penwidth=1.6];
+
+    // --- estados del camino feliz ---
+    PENDIENTE   [fillcolor="#eef1e7", color="#5c6b6a"];
+    DEBITADO    [fillcolor="#eef1e7", color="#5c6b6a"];
+    RIESGO_OK   [fillcolor="#eef1e7", color="#5c6b6a"];
+    LIQUIDADO   [fillcolor="#eef1e7", color="#5c6b6a"];
+    CONFIRMADO  [fillcolor="#2f6f5c", fontcolor=white, color="#1f4d3f", penwidth=2, peripheries=2];
+
+    // --- estados finales de rechazo ---
+    RECHAZADO_FONDOS [fillcolor="#f3e6e1", color="#9c4530", penwidth=2, peripheries=2];
+    RECHAZADO_RIESGO [fillcolor="#f3e6e1", color="#9c4530", penwidth=2, peripheries=2];
+    RECHAZADO_RED    [fillcolor="#f3e6e1", color="#9c4530", penwidth=2, peripheries=2];
+
+    START [shape=circle, width=0.18, style=filled, fillcolor="#5c6b6a", label="", fixedsize=true];
+
+    // --- camino feliz (verde) ---
+    START -> PENDIENTE;
+    PENDIENTE  -> DEBITADO   [color="#2f6f5c", label="debitar()  ok"];
+    DEBITADO   -> RIESGO_OK  [color="#2f6f5c", label="validar_riesgo()  ok"];
+    RIESGO_OK  -> LIQUIDADO  [color="#2f6f5c", label="liquidar()  ok"];
+    LIQUIDADO  -> CONFIRMADO [color="#2f6f5c", label="acreditar()"];
+
+    // --- ramas de rechazo / compensación (rojo) ---
+    PENDIENTE -> RECHAZADO_FONDOS [color="#9c4530", label=<CP-02 · debitar() rechaza<br/><font color="#a8792c">(sin compensación: nada se aplicó)</font>>];
+
+    DEBITADO -> RECHAZADO_RIESGO [color="#9c4530", label=<CP-03 · validar_riesgo() rechaza<br/><font color="#a8792c">compensa: revertir_debito()</font>>];
+
+    RIESGO_OK -> RECHAZADO_RED [color="#9c4530", label=<CP-04 · liquidar() falla<br/><font color="#a8792c">compensa en reversa:<br/>revertir_riesgo() &#8594; revertir_debito()</font>>];
+
+    { rank=same; RECHAZADO_FONDOS; RECHAZADO_RIESGO; RECHAZADO_RED; }
+}
