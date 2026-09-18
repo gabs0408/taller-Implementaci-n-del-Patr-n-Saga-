@@ -1,0 +1,139 @@
+asyncapi: 2.6.0
+info:
+  title: NovaBank Saga — bus de eventos (modo Coreografía)
+  version: "0.1.0"
+  description: >
+    Contrato de los eventos de dominio para la Saga Coreografiada (Fase 3).
+    Para las llamadas síncronas de la Saga Orquestada ver openapi.yaml en
+    esta misma carpeta — ambos modos comparten los mismos campos de negocio
+    (regla 3 de /CONTEXT.md: una sola lógica, dos formas de dispararla).
+
+defaultContentType: application/json
+
+servers:
+  event-bus:
+    url: event-bus:6379
+    protocol: redis
+    description: >
+      Un único stream de Redis (`novabank:transferencias`), no un stream por
+      evento. Cada entrada XADD trae 3 campos: `tipo` (uno de los mensajes de
+      abajo), `payload` (el JSON de ese mensaje, como string) y `ts`. Ver
+      common/events.py. Si el equipo prefiere un exchange/tema por evento
+      (RabbitMQ/Kafka), este archivo sigue siendo válido — cambia el
+      transporte, no el contrato de payloads.
+
+channels:
+  novabank.transferencias:
+    description: >
+      Cada microservicio se suscribe solo a los eventos que le conciernen
+      (ver /CONTEXT.md sección 3 y el diagrama de arquitectura) y publica el
+      siguiente evento de la cadena — nadie coordina el orden desde afuera.
+    subscribe:
+      summary: Eventos que un consumidor (accounts/risk/clearing-service) puede recibir.
+      message:
+        oneOf:
+          - $ref: "#/components/messages/TransferenciaSolicitada"
+          - $ref: "#/components/messages/SaldoDebitado"
+          - $ref: "#/components/messages/RiesgoAprobado"
+          - $ref: "#/components/messages/RiesgoRechazado"
+          - $ref: "#/components/messages/LiquidacionConfirmada"
+          - $ref: "#/components/messages/TransferenciaFallida"
+          - $ref: "#/components/messages/CompensacionEjecutada"
+    publish:
+      summary: Eventos que cualquier servicio puede publicar en el mismo stream.
+      message:
+        oneOf:
+          - $ref: "#/components/messages/TransferenciaSolicitada"
+          - $ref: "#/components/messages/SaldoDebitado"
+          - $ref: "#/components/messages/RiesgoAprobado"
+          - $ref: "#/components/messages/RiesgoRechazado"
+          - $ref: "#/components/messages/LiquidacionConfirmada"
+          - $ref: "#/components/messages/TransferenciaFallida"
+          - $ref: "#/components/messages/CompensacionEjecutada"
+
+components:
+  messages:
+    TransferenciaSolicitada:
+      summary: El Gateway pidió iniciar la Saga en modo coreografía.
+      description: "Quién publica: gateway. Quién escucha: accounts-service."
+      payload:
+        $ref: "#/components/schemas/EventoBase"
+
+    SaldoDebitado:
+      summary: accounts-service debitó el origen con éxito (CP-01, CP-03, CP-04 en curso).
+      description: "Quién publica: accounts-service. Quién escucha: risk-service."
+      payload:
+        $ref: "#/components/schemas/EventoBase"
+
+    RiesgoAprobado:
+      summary: risk-service aprobó la operación.
+      description: "Quién publica: risk-service. Quién escucha: clearing-service."
+      payload:
+        $ref: "#/components/schemas/EventoBase"
+
+    RiesgoRechazado:
+      summary: risk-service rechazó la operación — dispara la compensación de CP-03.
+      description: "Quién publica: risk-service. Quién escucha: accounts-service (revertir_debito)."
+      payload:
+        allOf:
+          - $ref: "#/components/schemas/EventoBase"
+          - type: object
+            required: [motivo]
+            properties:
+              motivo: { type: string, example: fraude_simulado }
+
+    LiquidacionConfirmada:
+      summary: clearing-service liquidó con éxito — camino feliz completo.
+      description: "Quién publica: clearing-service. Quién escucha: accounts-service (acreditar destino)."
+      payload:
+        $ref: "#/components/schemas/EventoBase"
+
+    TransferenciaFallida:
+      summary: clearing-service no pudo liquidar — dispara la compensación de CP-04.
+      description: >
+        Quién publica: clearing-service. Quién escucha: risk-service
+        (revertir aprobación) Y accounts-service (revertir débito) — los dos
+        reaccionan al mismo evento, en cualquier orden; accounts-service es
+        quien deja el estado final RECHAZADO_RED porque su compensación es
+        la última del orden inverso.
+      payload:
+        allOf:
+          - $ref: "#/components/schemas/EventoBase"
+          - type: object
+            required: [fase, motivo]
+            properties:
+              fase: { type: string, example: pasarela }
+              motivo: { type: string, example: timeout_pasarela }
+
+    CompensacionEjecutada:
+      summary: Un servicio terminó de deshacer su paso — evento de auditoría, nadie más reacciona a él.
+      description: "Quién publica: accounts-service y risk-service, cada uno tras compensar."
+      payload:
+        allOf:
+          - $ref: "#/components/schemas/EventoBase"
+          - type: object
+            required: [servicio]
+            properties:
+              servicio: { type: string, enum: [cuentas, riesgo] }
+
+  schemas:
+    Simulacion:
+      type: object
+      description: Switches de caos — mismo objeto que en openapi.yaml, viaja sin cambios dentro del evento.
+      properties:
+        fondos_insuficientes: { type: boolean, default: false }
+        fraude: { type: boolean, default: false }
+        timeout_pasarela: { type: boolean, default: false }
+        reintento_duplicado: { type: boolean, default: false }
+
+    EventoBase:
+      type: object
+      description: Campos que lleva TODO evento de esta Saga — cada mensaje concreto le agrega los suyos encima.
+      required: [transfer_id, cuenta_origen, cuenta_destino, monto]
+      properties:
+        transfer_id: { type: string, format: uuid }
+        cuenta_origen: { type: string, example: ACC-001 }
+        cuenta_destino: { type: string, example: ACC-002 }
+        monto: { type: number, format: double }
+        simulacion:
+          $ref: "#/components/schemas/Simulacion"

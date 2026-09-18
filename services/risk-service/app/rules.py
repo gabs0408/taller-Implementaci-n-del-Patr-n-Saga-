@@ -1,21 +1,22 @@
-"""Reglas de validación operativa (Fase 1, f1-2).
+"""Reglas de validación de riesgo — puras, sin acceso a datos.
 
-TODO (Fase 1): mover el límite diario a Supabase (por cuenta, con
-acumulado del día) en vez de una constante — esto es un placeholder
-para que el servicio arranque ya.
+Los valores (límite diario acumulado, monto máximo por transferencia) son
+configurables por cuenta en risk.limites (ver app/store.py); esta función
+solo aplica la lógica una vez que esos números ya se resolvieron, así que se
+puede probar sin base de datos.
+
+El switch de fraude (simulacion.fraude) no pasa por acá — se resuelve en
+app/core.py antes de llegar a este módulo, igual que fondos_insuficientes en
+accounts-service: un rechazo forzado no evalúa ninguna regla real.
 """
 
-LIMITE_DIARIO = 50_000_000.0
 
-
-def evaluar(monto: float, simulacion: dict | None = None) -> tuple[bool, str | None]:
+def evaluar(monto: float, monto_maximo: float, limite_diario: float, acumulado_hoy: float) -> tuple[bool, str | None]:
     """Devuelve (aprobado, motivo_rechazo)."""
-    simulacion = simulacion or {}
+    if monto > monto_maximo:
+        return False, "excede_monto_maximo"
 
-    if simulacion.get("fraude"):
-        return False, "fraude_simulado"
-
-    if monto > LIMITE_DIARIO:
+    if acumulado_hoy + monto > limite_diario:
         return False, "excede_limite_diario"
 
     return True, None

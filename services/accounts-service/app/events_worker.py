@@ -31,13 +31,13 @@ def on_transferencia_solicitada(payload: dict) -> None:
         publicar("SaldoDebitado", {**payload})
     else:
         # CP-02: nada que compensar todavía.
-        set_estado(transfer_id, RECHAZADO_FONDOS)
+        set_estado(transfer_id, RECHAZADO_FONDOS, motivo=resultado.get("motivo"))
 
 
 def on_riesgo_rechazado(payload: dict) -> None:
     transfer_id = payload["transfer_id"]
     core.revertir_debito(transfer_id, payload["cuenta_origen"], payload["monto"])
-    set_estado(transfer_id, RECHAZADO_RIESGO)
+    set_estado(transfer_id, RECHAZADO_RIESGO, motivo=payload.get("motivo"))
     publicar("CompensacionEjecutada", {**payload, "servicio": "cuentas"})
 
 
@@ -46,7 +46,7 @@ def on_transferencia_fallida(payload: dict) -> None:
     # compensación (orden inverso: liquidar, riesgo, débito).
     transfer_id = payload["transfer_id"]
     core.revertir_debito(transfer_id, payload["cuenta_origen"], payload["monto"])
-    set_estado(transfer_id, RECHAZADO_RED)
+    set_estado(transfer_id, RECHAZADO_RED, motivo=payload.get("motivo"))
     publicar("CompensacionEjecutada", {**payload, "servicio": "cuentas"})
 
 

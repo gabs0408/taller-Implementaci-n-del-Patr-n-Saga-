@@ -2,7 +2,7 @@
 
 Taller de Arquitectura de Software Distribuida: patrón Saga bancario
 (Orquestación con Prefect vs. Coreografía basada en eventos), con
-observabilidad y compensaciones en reversa. Ver **[CONTEXT.md](./CONTEXT.md)**
+observabilidad y compensaciones en reversa. Ver **[CLAUDE.md](./CLAUDE.md)**
 para el contrato completo entre servicios, la máquina de estados y la
 bitácora de decisiones del equipo — léanlo antes de tocar código.
 
@@ -19,7 +19,7 @@ Prefect, endpoint de reintento con el mismo idempotency-key, etc.).
 
 ```
 novabank-saga/
-├── CONTEXT.md              # fuente de verdad: contratos, estados, bitácora
+├── CLAUDE.md               # fuente de verdad: contratos, estados, bitácora
 ├── docker-compose.yml
 ├── common/                 # librería compartida (Redis, eventos, idempotencia, modelos)
 ├── gateway/                # API Gateway — genera idempotency-key, despacha por modo
@@ -29,6 +29,7 @@ novabank-saga/
 │   └── clearing-service/   # Pasarela Interbancaria
 ├── orchestrator/           # Flow de Prefect — Saga Orquestada
 ├── frontend/               # React + Vite — formulario, switches de caos, timeline
+├── contracts/              # openapi.yaml + events.asyncapi.yaml — el contrato formal (Fase 0)
 ├── docs/                   # comparación Orquestación vs Coreografía, diagramas
 └── tests/                  # matriz CP-01..CP-05 (Fase 6)
 ```
@@ -37,7 +38,7 @@ Cada microservicio expone su lógica de negocio como funciones puras en
 `app/core.py`. La ruta REST (`app/routes.py`, modo Orquestación) y el
 listener de eventos (`app/events_worker.py`, modo Coreografía) llaman
 **a las mismas funciones** — nunca dupliquen la lógica entre los dos
-modos (regla 3 de CONTEXT.md).
+modos (regla 3 de CLAUDE.md).
 
 ## Cómo correrlo
 
@@ -67,22 +68,40 @@ curl -X POST http://localhost:8000/transferencias \
   -H "Content-Type: application/json" \
   -d '{"cuenta_origen":"ACC-001","cuenta_destino":"ACC-002","monto":10000,"modo":"orquestacion"}'
 
-curl http://localhost:8000/transferencias/<transfer_id>
+curl http://localhost:8000/transferencias/<transfer_id>                # estado + pasos (Redis, rápido)
+curl http://localhost:8000/transferencias/<transfer_id>/auditoria      # transiciones durables (Postgres), con causa del fallo
+curl http://localhost:8000/transferencias/<transfer_id>/eventos        # trazabilidad de Coreografía (lee el bus directo)
 ```
 
 Frontend: http://localhost:5173
 
 ## Bases de datos (Supabase)
 
-Todavía no están conectadas — cada servicio guarda su estado en
-memoria (`app/store.py` / listas hardcodeadas) para que el esqueleto
-arranque ya. Fase 1 del checklist: crear un proyecto o esquema de
-Supabase por servicio y copiar `.env.example` → `.env` con las
-connection strings reales.
+Los 3 microservicios ya están conectados a Postgres — correr primero el
+`schema.sql` de cada uno contra su proyecto de Supabase, copiar su
+`.env.example` → `.env` y, para `docker-compose up`, completar
+`ACCOUNTS_DATABASE_URL`, `RISK_DATABASE_URL` y `CLEARING_DATABASE_URL` en un
+`.env` en la raíz del repo (ver `.env.example`). Sin esas variables, los
+servicios arrancan igual pero sus endpoints devuelven error de conexión al
+primer uso.
+
+- `accounts-service`: `app/store.py`, tablas `accounts.cuentas` y `accounts.movimientos`.
+- `risk-service`: `app/store.py`, tablas `risk.limites` (límite diario y monto
+  máximo configurables por cuenta), `risk.evaluaciones` y `risk.acumulado_diario`.
+- `clearing-service`: `app/store.py`, tabla `clearing.liquidaciones` (confirmada/fallida,
+  con el motivo cuando el switch de timeout la fuerza a fallar).
+
+Además, **`common/status_store.py`** persiste cada transición de estado
+(`estado_anterior` → `estado_nuevo`, con timestamp) en `bitacora.transiciones`
+— correr `common/schema_bitacora.sql` una vez y completar `AUDIT_DATABASE_URL`
+en el `.env` de la raíz. Es la bitácora de auditoría DURABLE (sobrevive un
+reinicio de Redis), consultable vía `GET /transferencias/{id}/auditoria` o
+con SQL directo. El rol recomendado solo tiene `INSERT`+`SELECT` — ni
+siquiera el propio backend puede editar o borrar una fila ya escrita.
 
 ## Qué falta (por fase — ver el checklist para el detalle completo)
 
-- **Fase 1:** conectar Supabase en los 3 servicios (hoy en memoria).
+- **Fase 1:** los 3 microservicios ya están conectados a Supabase — falta que cada quien cree su proyecto real y complete las connection strings (hoy solo hay `.env.example`).
 - **Fase 2:** mover el orquestador a un deployment real de Prefect
   (hoy corre el flow en un hilo dentro de `orchestrator/api.py`).
 - **Fase 4:** el Prefect UI ya está expuesto (http://localhost:4200,

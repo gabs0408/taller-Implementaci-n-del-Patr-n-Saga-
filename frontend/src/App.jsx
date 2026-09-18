@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import TransferForm from "./components/TransferForm.jsx";
 import ChaosSwitches from "./components/ChaosSwitches.jsx";
 import SagaTimeline from "./components/SagaTimeline.jsx";
-import { crearTransferencia, consultarEstado } from "./api.js";
+import AuditoriaYEventos from "./components/AuditoriaYEventos.jsx";
+import ReintentoCP05 from "./components/ReintentoCP05.jsx";
+import { crearTransferencia, consultarEstado, consultarAuditoria, consultarEventos } from "./api.js";
 
 const ESTADOS_FINALES = ["CONFIRMADO", "RECHAZADO_FONDOS", "RECHAZADO_RIESGO", "RECHAZADO_RED"];
 
@@ -21,13 +23,31 @@ export default function App() {
   const [transferId, setTransferId] = useState(null);
   const [estado, setEstado] = useState(null);
   const [pasos, setPasos] = useState([]);
+  const [modoUsado, setModoUsado] = useState("orquestacion");
+  const [idempotencyKey, setIdempotencyKey] = useState(null);
+  const [auditoria, setAuditoria] = useState(null);
+  const [eventos, setEventos] = useState(null);
   const pollRef = useRef(null);
 
-  async function iniciar() {
+  async function despachar({ idemKey } = {}) {
     setPasos([]);
+    setAuditoria(null);
+    setEventos(null);
     setEstado("PENDIENTE");
-    const resp = await crearTransferencia({ ...values, simulacion: switches });
+    setModoUsado(values.modo);
+    const resp = await crearTransferencia({ ...values, simulacion: switches, idempotencyKey: idemKey });
+    setIdempotencyKey(resp.idempotencyKey);
     setTransferId(resp.transfer_id);
+  }
+
+  function iniciar() {
+    despachar();
+  }
+
+  function reenviar() {
+    // CP-05: mismo idempotencyKey capturado de la respuesta anterior — el
+    // Gateway debe devolver el mismo transfer_id sin volver a despachar.
+    despachar({ idemKey: idempotencyKey });
   }
 
   useEffect(() => {
@@ -38,7 +58,15 @@ export default function App() {
         const data = await consultarEstado(transferId);
         setEstado(data.estado);
         setPasos(data.pasos);
-        if (ESTADOS_FINALES.includes(data.estado)) clearInterval(pollRef.current);
+        if (ESTADOS_FINALES.includes(data.estado)) {
+          clearInterval(pollRef.current);
+          const [aud, ev] = await Promise.all([
+            consultarAuditoria(transferId).catch(() => null),
+            consultarEventos(transferId).catch(() => null),
+          ]);
+          setAuditoria(aud);
+          setEventos(ev);
+        }
       } catch {
         // TODO (Fase 5): manejar el caso en que el gateway todavía no
         // tiene registro (carrera con el primer paso) sin ensuciar la consola.
@@ -50,22 +78,27 @@ export default function App() {
   const enProceso = transferId && !ESTADOS_FINALES.includes(estado);
 
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: 24, display: "grid", gap: 24, maxWidth: 960 }}>
-      <h1>NovaBank Saga — Simulador</h1>
+    <div className="app-shell">
+      <header className="app-header">
+        <h1>NovaBank Saga — Simulador</h1>
+        <p>
+          Taller de Arquitectura de Software Distribuida: patrón Saga bancario, contrastando
+          Orquestación (Prefect) y Coreografía (eventos) con compensaciones estrictas en reversa.
+        </p>
+      </header>
 
-      <section style={{ display: "flex", gap: 40, flexWrap: "wrap" }}>
-        <TransferForm values={values} onChange={setValues} onSubmit={iniciar} disabled={enProceso} />
-        <ChaosSwitches values={switches} onChange={setSwitches} />
-      </section>
+      <div className="app-layout">
+        <div className="control-column">
+          <TransferForm values={values} onChange={setValues} onSubmit={iniciar} disabled={enProceso} />
+          <ChaosSwitches values={switches} onChange={setSwitches} />
+          <ReintentoCP05 idempotencyKey={idempotencyKey} disabled={enProceso} onReenviar={reenviar} />
+        </div>
 
-      <SagaTimeline transferId={transferId} estado={estado} pasos={pasos} />
-
-      <p style={{ fontSize: 13, color: "#5c6b6a" }}>
-        CP-05 (idempotencia): vuelve a enviar el mismo formulario sin cambiar nada —
-        el Gateway debe reconocer el reintento por el header X-Idempotency-Key.
-        {/* TODO (Fase 5): exponer un botón "reenviar" que reuse el mismo
-            idempotency-key en vez de generar uno nuevo por request. */}
-      </p>
-    </main>
+        <div className="results-column">
+          <SagaTimeline transferId={transferId} estado={estado} pasos={pasos} />
+          <AuditoriaYEventos modo={modoUsado} auditoria={auditoria} eventos={eventos} />
+        </div>
+      </div>
+    </div>
   );
 }

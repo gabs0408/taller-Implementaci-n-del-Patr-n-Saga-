@@ -27,8 +27,11 @@ dot -Tsvg docs/arquitectura-c4.dot -o docs/arquitectura-c4.svg
   de Redis (`set_estado()` / `registrar_paso()`), y el Gateway la lee
   para el `GET /transferencias/{id}` que consume el frontend. Por eso el
   timeline se ve igual sin importar qué modo eligió el usuario.
-- **Rojo punteado = todavía no implementado.** La conexión a Supabase
-  (Fase 1) — hoy cada servicio guarda su estado en memoria.
+- **Rojo punteado = todavía no implementado.** *(Desactualizado: la
+  conexión a Supabase que marcaba en rojo ya está implementada en los 3
+  microservicios desde la sesión de Fase 1 — falta regenerar
+  `arquitectura-c4.dot`/`.png`/`.svg` para sacar esa marca; el texto de acá
+  ya no aplica.)*
 
 ## Qué NO muestra este diagrama (a propósito)
 

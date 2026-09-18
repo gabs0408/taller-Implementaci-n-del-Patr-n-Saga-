@@ -1,5 +1,10 @@
 FROM python:3.12-slim
 WORKDIR /srv
+# Sin esto, los print() del worker de eventos (common/events.py) quedan en
+# el buffer de stdout hasta que el proceso termina — invisibles en `docker
+# logs` mientras el proceso sigue vivo. Nos mordió en vivo diagnosticando
+# la reconexión al event-bus.
+ENV PYTHONUNBUFFERED=1
 
 COPY services/accounts-service/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt

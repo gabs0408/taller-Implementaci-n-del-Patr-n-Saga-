@@ -1,32 +1,36 @@
 export default function TransferForm({ values, onChange, onSubmit, disabled }) {
   return (
     <form
+      className="card"
       onSubmit={(e) => {
         e.preventDefault();
         onSubmit();
       }}
-      style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 360 }}
     >
-      <label>
-        Cuenta origen
+      <h2>Transferencia</h2>
+
+      <div className="field">
+        <label>Cuenta origen</label>
         <input
           value={values.cuentaOrigen}
           onChange={(e) => onChange({ ...values, cuentaOrigen: e.target.value })}
           placeholder="ACC-001"
           required
         />
-      </label>
-      <label>
-        Cuenta destino
+      </div>
+
+      <div className="field">
+        <label>Cuenta destino</label>
         <input
           value={values.cuentaDestino}
           onChange={(e) => onChange({ ...values, cuentaDestino: e.target.value })}
           placeholder="ACC-002"
           required
         />
-      </label>
-      <label>
-        Importe
+      </div>
+
+      <div className="field">
+        <label>Importe</label>
         <input
           type="number"
           min="0"
@@ -35,15 +39,17 @@ export default function TransferForm({ values, onChange, onSubmit, disabled }) {
           onChange={(e) => onChange({ ...values, monto: e.target.value })}
           required
         />
-      </label>
-      <label>
-        Modo
+      </div>
+
+      <div className="field">
+        <label>Modo de la Saga</label>
         <select value={values.modo} onChange={(e) => onChange({ ...values, modo: e.target.value })}>
           <option value="orquestacion">Orquestación (Prefect)</option>
           <option value="coreografia">Coreografía (eventos)</option>
         </select>
-      </label>
-      <button type="submit" disabled={disabled}>
+      </div>
+
+      <button type="submit" className="btn btn-primary" disabled={disabled}>
         {disabled ? "Procesando…" : "Iniciar transferencia"}
       </button>
     </form>

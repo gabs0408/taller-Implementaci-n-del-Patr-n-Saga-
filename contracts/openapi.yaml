@@ -1,0 +1,451 @@
+openapi: 3.0.3
+info:
+  title: NovaBank Saga — llamadas síncronas
+  version: "0.1.0"
+  description: >
+    Contrato de las llamadas HTTP síncronas entre el Gateway, el Orchestrator
+    (Prefect) y los 3 microservicios de dominio — modo Orquestación.
+    Para el modo Coreografía ver events.asyncapi.yaml en esta misma carpeta.
+    Fuente de verdad además explicada en /CONTEXT.md — si cambian un campo
+    aquí, cámbienlo también allá (regla 2 de CONTEXT.md).
+
+servers:
+  - url: http://localhost:8000
+    description: API Gateway (el único que ve el frontend)
+  - url: http://localhost:8001
+    description: accounts-service (llamado solo por el Orchestrator)
+  - url: http://localhost:8002
+    description: risk-service (llamado solo por el Orchestrator)
+  - url: http://localhost:8003
+    description: clearing-service (llamado solo por el Orchestrator)
+
+tags:
+  - name: Gateway
+    description: Único punto de entrada del frontend.
+  - name: Cuentas
+    description: Servicio de Cuentas y Saldos (Ledger).
+  - name: Riesgo
+    description: Servicio de Riesgo y Antifraude.
+  - name: Pasarela
+    description: Pasarela Interbancaria (Clearing Gateway).
+
+paths:
+  # ------------------------------------------------------------------
+  # GATEWAY — lo único que el frontend conoce
+  # ------------------------------------------------------------------
+  /transferencias:
+    post:
+      tags: [Gateway]
+      summary: Inicia una transferencia (arranca la Saga en el modo elegido)
+      description: >
+        Genera el transfer_id (UUID) y, según `modo`, despacha hacia el
+        Orchestrator (Prefect) o publica el evento inicial en el bus — ver
+        events.asyncapi.yaml. El campo `simulacion` viaja intacto hasta cada
+        microservicio, sea cual sea el modo.
+      parameters:
+        - in: header
+          name: X-Idempotency-Key
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: >
+            Si se repite (CP-05), el Gateway devuelve la misma respuesta ya
+            emitida en vez de volver a despachar la transferencia. Si se omite,
+            el Gateway genera una — y la devuelve en el header de respuesta
+            X-Idempotency-Key, para que el cliente pueda capturarla y
+            reenviarla en un reintento real.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferRequest"
+      responses:
+        "200":
+          description: Transferencia aceptada y despachada (no implica éxito final).
+          headers:
+            X-Idempotency-Key:
+              description: >
+                La clave de idempotencia usada para esta request — la que mandó
+                el cliente, o la generada por el Gateway si no mandó ninguna.
+              schema:
+                type: string
+                format: uuid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferResponse"
+
+  /transferencias/{transferId}:
+    get:
+      tags: [Gateway]
+      summary: Estado actual + bitácora de una transferencia (para el polling del frontend)
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Estado y pasos registrados hasta ahora.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstadoTransferencia"
+        "404":
+          description: transfer_id no existe (o ya expiró de Redis).
+
+  /transferencias/{transferId}/auditoria:
+    get:
+      tags: [Gateway]
+      summary: Historial durable de transiciones de estado (Postgres, no Redis)
+      description: >
+        A diferencia de GET /transferencias/{transferId} (bitácora rápida en
+        Redis, operación por operación), este endpoint lee
+        bitacora.transiciones — una fila por cada cambio de `estado`
+        (estado_anterior, estado_nuevo, timestamp), escrita por
+        common/status_store.set_estado() y persistida con un rol de solo
+        INSERT+SELECT (inmutable). Sobrevive un reinicio de Redis.
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Lista de transiciones en orden cronológico.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transfer_id: { type: string, format: uuid }
+                  transiciones:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        estado_anterior: { type: string, nullable: true }
+                        estado_nuevo: { type: string }
+                        motivo:
+                          type: string
+                          nullable: true
+                          description: >
+                            Causa del rechazo (fondos_insuficientes,
+                            fraude_simulado, timeout_pasarela) cuando
+                            estado_nuevo es un RECHAZADO_*. Null en
+                            transiciones de éxito.
+                          example: fraude_simulado
+                        ts: { type: string, format: date-time }
+        "404":
+          description: >
+            Sin transiciones registradas — o AUDIT_DATABASE_URL no está
+            configurada (degrada con gracia, no rompe el resto del sistema).
+
+  /transferencias/{transferId}/eventos:
+    get:
+      tags: [Gateway]
+      summary: Trazabilidad de Coreografía — lee el bus de eventos directamente
+      description: >
+        El equivalente al Prefect UI para el modo sin coordinador: no hay
+        flow run que consultar, así que la traza de una transferencia es la
+        secuencia de eventos de dominio que pasaron por el stream de Redis
+        con su transfer_id (ver contracts/events.asyncapi.yaml para el
+        payload de cada tipo). En modo Orquestación normalmente solo va a
+        aparecer `TransferenciaSolicitada` — ese modo no pasa por el bus
+        para el resto de los pasos.
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Eventos en orden cronológico.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transfer_id: { type: string, format: uuid }
+                  eventos:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, description: "ID del mensaje en el stream de Redis" }
+                        tipo: { type: string, example: RiesgoRechazado }
+                        payload: { type: object }
+                        ts: { type: number, format: double }
+        "404":
+          description: Sin eventos en el bus para esta transferencia.
+
+  # ------------------------------------------------------------------
+  # CUENTAS Y SALDOS (Ledger) — llamado por el Orchestrator
+  # ------------------------------------------------------------------
+  /cuentas/{cuentaId}/debitar:
+    post:
+      tags: [Cuentas]
+      summary: Débito de la cuenta origen (primer paso de la Saga)
+      description: CP-02 se decide aquí — fondos insuficientes rechaza sin aplicar nada.
+      parameters:
+        - $ref: "#/components/parameters/CuentaId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DebitarBody"
+      responses:
+        "200":
+          description: Resultado del débito (ok o rechazo por fondos).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoSaldo"
+
+  /cuentas/{cuentaId}/acreditar:
+    post:
+      tags: [Cuentas]
+      summary: Crédito a la cuenta destino (paso final del camino feliz)
+      parameters:
+        - $ref: "#/components/parameters/CuentaId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MontoBody"
+      responses:
+        "200":
+          description: Crédito aplicado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoSaldo"
+
+  /cuentas/{cuentaId}/revertir-debito:
+    post:
+      tags: [Cuentas]
+      summary: Transacción de compensación — reintegra el 100% del débito (CP-03, CP-04)
+      parameters:
+        - $ref: "#/components/parameters/CuentaId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MontoBody"
+      responses:
+        "200":
+          description: Reversa aplicada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoSaldo"
+
+  /cuentas/{cuentaId}/saldo:
+    get:
+      tags: [Cuentas]
+      summary: Saldo actual (para pruebas manuales, no lo usa la Saga)
+      parameters:
+        - $ref: "#/components/parameters/CuentaId"
+      responses:
+        "200":
+          description: Saldo actual.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cuenta_id: { type: string }
+                  saldo: { type: number, format: double }
+
+  # ------------------------------------------------------------------
+  # RIESGO Y ANTIFRAUDE — llamado por el Orchestrator
+  # ------------------------------------------------------------------
+  /riesgo/validar:
+    post:
+      tags: [Riesgo]
+      summary: Valida reglas de riesgo (límite diario, fraude simulado)
+      description: CP-03 se decide aquí.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidarRiesgoBody"
+      responses:
+        "200":
+          description: Aprobado o rechazado, con motivo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoMotivo"
+
+  /riesgo/revertir:
+    post:
+      tags: [Riesgo]
+      summary: Anula la aprobación de riesgo (compensación de CP-04)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transfer_id]
+              properties:
+                transfer_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Compensación registrada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+
+  # ------------------------------------------------------------------
+  # PASARELA INTERBANCARIA (Clearing Gateway) — llamado por el Orchestrator
+  # ------------------------------------------------------------------
+  /pasarela/liquidar:
+    post:
+      tags: [Pasarela]
+      summary: Simula la liquidación externa de fondos
+      description: CP-04 (timeout simulado) se decide aquí. Sin compensación propia.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LiquidarBody"
+      responses:
+        "200":
+          description: Liquidación confirmada o fallida, con motivo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoMotivo"
+
+components:
+  parameters:
+    CuentaId:
+      in: path
+      name: cuentaId
+      required: true
+      schema:
+        type: string
+        example: ACC-001
+
+  schemas:
+    Simulacion:
+      type: object
+      description: >
+        Switches de caos que el frontend activa (Fase 5). Viajan intactos
+        desde el Gateway hasta cada microservicio, en modo Orquestación (aquí,
+        dentro del *Body) y en modo Coreografía (dentro del evento — ver
+        events.asyncapi.yaml).
+      properties:
+        fondos_insuficientes: { type: boolean, default: false, description: "CP-02" }
+        fraude: { type: boolean, default: false, description: "CP-03" }
+        timeout_pasarela: { type: boolean, default: false, description: "CP-04" }
+        reintento_duplicado: { type: boolean, default: false, description: "CP-05 (informativo; el reintento real se detecta por X-Idempotency-Key repetido, no por este flag)" }
+
+    TransferRequest:
+      type: object
+      required: [cuenta_origen, cuenta_destino, monto]
+      properties:
+        cuenta_origen: { type: string, example: ACC-001 }
+        cuenta_destino: { type: string, example: ACC-002 }
+        monto: { type: number, format: double, example: 10000 }
+        modo:
+          type: string
+          enum: [orquestacion, coreografia]
+          default: orquestacion
+          description: Decide si el Gateway llama al Orchestrator o publica en el bus.
+        simulacion:
+          $ref: "#/components/schemas/Simulacion"
+
+    TransferResponse:
+      type: object
+      properties:
+        transfer_id: { type: string, format: uuid }
+        modo: { type: string, enum: [orquestacion, coreografia] }
+        estado: { type: string, example: PENDIENTE }
+
+    PasoBitacora:
+      type: object
+      properties:
+        paso: { type: string, example: debitar }
+        resultado: { type: string, enum: [ok, rechazado, fallido, compensado] }
+        detalle: { type: object, additionalProperties: true }
+        ts: { type: number, format: double, description: "epoch seconds" }
+
+    EstadoTransferencia:
+      type: object
+      properties:
+        transfer_id: { type: string, format: uuid }
+        estado:
+          type: string
+          enum: [PENDIENTE, DEBITADO, RIESGO_OK, LIQUIDADO, CONFIRMADO, RECHAZADO_FONDOS, RECHAZADO_RIESGO, RECHAZADO_RED]
+        pasos:
+          type: array
+          items:
+            $ref: "#/components/schemas/PasoBitacora"
+
+    DebitarBody:
+      type: object
+      required: [transfer_id, monto]
+      properties:
+        transfer_id: { type: string, format: uuid }
+        monto: { type: number, format: double }
+        simulacion:
+          $ref: "#/components/schemas/Simulacion"
+
+    MontoBody:
+      type: object
+      required: [transfer_id, monto]
+      properties:
+        transfer_id: { type: string, format: uuid }
+        monto: { type: number, format: double }
+
+    ValidarRiesgoBody:
+      type: object
+      required: [transfer_id, cuenta_origen, monto]
+      properties:
+        transfer_id: { type: string, format: uuid }
+        cuenta_origen: { type: string }
+        monto: { type: number, format: double }
+        simulacion:
+          $ref: "#/components/schemas/Simulacion"
+
+    LiquidarBody:
+      type: object
+      required: [transfer_id, cuenta_destino, monto]
+      properties:
+        transfer_id: { type: string, format: uuid }
+        cuenta_destino: { type: string }
+        monto: { type: number, format: double }
+        simulacion:
+          $ref: "#/components/schemas/Simulacion"
+
+    ResultadoSaldo:
+      type: object
+      properties:
+        ok: { type: boolean }
+        saldo_restante: { type: number, format: double }
+        motivo: { type: string, nullable: true, example: fondos_insuficientes }
+
+    ResultadoMotivo:
+      type: object
+      properties:
+        ok: { type: boolean }
+        motivo: { type: string, nullable: true, example: fraude_simulado }

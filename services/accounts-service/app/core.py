@@ -19,18 +19,25 @@ def debitar(transfer_id: str, cuenta_id: str, monto: float, simulacion: dict | N
 
     simulate_delay()
     simulacion = simulacion or {}
-    saldo = store.get_saldo(cuenta_id)
 
     # CP-02: fondos insuficientes -> rechazo inmediato, sin reversas
-    # (todavía no se aplicó nada, así que no hay nada que compensar).
-    if simulacion.get("fondos_insuficientes") or monto > saldo:
+    # (todavía no se aplicó nada, así que no hay nada que compensar). El
+    # switch de simulación se resuelve aquí; el chequeo real de saldo vive
+    # en store.debitar (atómico junto con el update, para evitar carreras).
+    if simulacion.get("fondos_insuficientes"):
         resultado = {"ok": False, "motivo": "fondos_insuficientes"}
         registrar_paso(transfer_id, op, "rechazado", resultado)
         marcar_procesado(transfer_id, op, resultado)
         return resultado
 
-    store.set_saldo(cuenta_id, saldo - monto)
-    resultado = {"ok": True, "saldo_restante": saldo - monto}
+    aplicado, saldo = store.debitar(transfer_id, cuenta_id, monto)
+    if not aplicado:
+        resultado = {"ok": False, "motivo": "fondos_insuficientes"}
+        registrar_paso(transfer_id, op, "rechazado", resultado)
+        marcar_procesado(transfer_id, op, resultado)
+        return resultado
+
+    resultado = {"ok": True, "saldo_restante": saldo}
     registrar_paso(transfer_id, op, "ok", resultado)
     marcar_procesado(transfer_id, op, resultado)
     return resultado
@@ -43,9 +50,8 @@ def acreditar(transfer_id: str, cuenta_id: str, monto: float) -> dict:
         return cached
 
     simulate_delay()
-    saldo = store.get_saldo(cuenta_id)
-    store.set_saldo(cuenta_id, saldo + monto)
-    resultado = {"ok": True, "saldo_restante": saldo + monto}
+    saldo = store.acreditar(transfer_id, cuenta_id, monto)
+    resultado = {"ok": True, "saldo_restante": saldo}
     registrar_paso(transfer_id, op, "ok", resultado)
     marcar_procesado(transfer_id, op, resultado)
     return resultado
@@ -60,9 +66,8 @@ def revertir_debito(transfer_id: str, cuenta_id: str, monto: float) -> dict:
         return cached
 
     simulate_delay()
-    saldo = store.get_saldo(cuenta_id)
-    store.set_saldo(cuenta_id, saldo + monto)
-    resultado = {"ok": True, "saldo_restante": saldo + monto}
+    saldo = store.revertir_debito(transfer_id, cuenta_id, monto)
+    resultado = {"ok": True, "saldo_restante": saldo}
     registrar_paso(transfer_id, op, "compensado", resultado)
     marcar_procesado(transfer_id, op, resultado)
     return resultado

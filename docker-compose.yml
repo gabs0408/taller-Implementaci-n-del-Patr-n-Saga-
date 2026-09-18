@@ -6,6 +6,15 @@ version: "3.9"
 services:
   event-bus:
     image: redis:7-alpine
+    restart: unless-stopped
+    # --appendonly yes: sin esto, un reinicio de este contenedor borra el
+    # stream completo (novabank:transferencias) y los offsets de los 3
+    # consumer groups — cualquier evento en vuelo se pierde. Con AOF +
+    # volumen, el bus sobrevive un restart (verificado: docker compose
+    # restart event-bus, el stream y los grupos siguen con el mismo lag=0).
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - event-bus-data:/data
     ports:
       - "6379:6379"
 
@@ -13,11 +22,16 @@ services:
     build:
       context: .
       dockerfile: gateway/Dockerfile
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://event-bus:6379/0
       - ORCHESTRATOR_URL=http://orchestrator:8010
+      # Bitácora durable de transiciones de estado (common/status_store.py,
+      # common/schema_bitacora.sql) — compartida entre gateway, orchestrator
+      # y los 3 microservicios + sus workers, todos los que llaman set_estado.
+      - AUDIT_DATABASE_URL=${AUDIT_DATABASE_URL}
     depends_on:
       - event-bus
 
@@ -25,10 +39,20 @@ services:
     build:
       context: .
       dockerfile: services/accounts-service/Dockerfile
+    restart: unless-stopped
     ports:
       - "8001:8000"
     environment:
       - REDIS_URL=redis://event-bus:6379/0
+      # Fase 1: connection string real de Supabase — ver
+      # services/accounts-service/.env.example. Se toma de la variable
+      # ACCOUNTS_DATABASE_URL del .env en la raíz del repo (no versionado).
+      - DATABASE_URL=${ACCOUNTS_DATABASE_URL}
+      - AUDIT_DATABASE_URL=${AUDIT_DATABASE_URL}
+      # Delay simulado (2-4s) en cada micro-paso: debitar, acreditar,
+      # revertir_debito — ver app/core.py. Default 3000 si no se define en
+      # el .env de la raíz.
+      - STEP_DELAY_MS=${STEP_DELAY_MS:-3000}
     depends_on:
       - event-bus
 
@@ -36,9 +60,13 @@ services:
     build:
       context: .
       dockerfile: services/accounts-service/Dockerfile
+    restart: unless-stopped
     command: ["python", "-m", "app.events_worker"]
     environment:
       - REDIS_URL=redis://event-bus:6379/0
+      - DATABASE_URL=${ACCOUNTS_DATABASE_URL}
+      - AUDIT_DATABASE_URL=${AUDIT_DATABASE_URL}
+      - STEP_DELAY_MS=${STEP_DELAY_MS:-3000}
     depends_on:
       - event-bus
 
@@ -46,10 +74,19 @@ services:
     build:
       context: .
       dockerfile: services/risk-service/Dockerfile
+    restart: unless-stopped
     ports:
       - "8002:8000"
     environment:
       - REDIS_URL=redis://event-bus:6379/0
+      # Fase 1: connection string real de Supabase — ver
+      # services/risk-service/.env.example. Se toma de la variable
+      # RISK_DATABASE_URL del .env en la raíz del repo (no versionado).
+      - DATABASE_URL=${RISK_DATABASE_URL}
+      - AUDIT_DATABASE_URL=${AUDIT_DATABASE_URL}
+      # Delay simulado (2-4s) en cada micro-paso: validar, revertir — ver
+      # app/core.py. Default 3000 si no se define en el .env de la raíz.
+      - STEP_DELAY_MS=${STEP_DELAY_MS:-3000}
     depends_on:
       - event-bus
 
@@ -57,9 +94,13 @@ services:
     build:
       context: .
       dockerfile: services/risk-service/Dockerfile
+    restart: unless-stopped
     command: ["python", "-m", "app.events_worker"]
     environment:
       - REDIS_URL=redis://event-bus:6379/0
+      - DATABASE_URL=${RISK_DATABASE_URL}
+      - AUDIT_DATABASE_URL=${AUDIT_DATABASE_URL}
+      - STEP_DELAY_MS=${STEP_DELAY_MS:-3000}
     depends_on:
       - event-bus
 
@@ -67,10 +108,21 @@ services:
     build:
       context: .
       dockerfile: services/clearing-service/Dockerfile
+    restart: unless-stopped
     ports:
       - "8003:8000"
     environment:
       - REDIS_URL=redis://event-bus:6379/0
+      # Fase 1: connection string real de Supabase — ver
+      # services/clearing-service/.env.example. Se toma de la variable
+      # CLEARING_DATABASE_URL del .env en la raíz del repo (no versionado).
+      - DATABASE_URL=${CLEARING_DATABASE_URL}
+      - AUDIT_DATABASE_URL=${AUDIT_DATABASE_URL}
+      # Delay simulado (2-4s) en el micro-paso liquidar — ver app/core.py.
+      # Default 3000 si no se define en el .env de la raíz. clearing-service
+      # no tiene compensación propia (ver core.py: "no tiene reversa
+      # propia"), así que no hay un revertir_* acá.
+      - STEP_DELAY_MS=${STEP_DELAY_MS:-3000}
     depends_on:
       - event-bus
 
@@ -78,9 +130,13 @@ services:
     build:
       context: .
       dockerfile: services/clearing-service/Dockerfile
+    restart: unless-stopped
     command: ["python", "-m", "app.events_worker"]
     environment:
       - REDIS_URL=redis://event-bus:6379/0
+      - DATABASE_URL=${CLEARING_DATABASE_URL}
+      - AUDIT_DATABASE_URL=${AUDIT_DATABASE_URL}
+      - STEP_DELAY_MS=${STEP_DELAY_MS:-3000}
     depends_on:
       - event-bus
 
@@ -90,6 +146,7 @@ services:
   # es justo lo que pide el Criterio 3 (Observabilidad, 15%).
   prefect-server:
     image: prefecthq/prefect:2-python3.12
+    restart: unless-stopped
     command: ["prefect", "server", "start", "--host", "0.0.0.0"]
     ports:
       - "4200:4200"   # UI: http://localhost:4200
@@ -100,6 +157,7 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+    restart: unless-stopped
     ports:
       - "8010:8010"   # bridge propio (Gateway -> aquí), NO es el puerto de Prefect
     environment:
@@ -107,10 +165,14 @@ services:
       - ACCOUNTS_URL=http://accounts-service:8000
       - RISK_URL=http://risk-service:8000
       - CLEARING_URL=http://clearing-service:8000
-      - STEP_DELAY_MS=3000
+      # Nota: STEP_DELAY_MS NO va acá — orchestrator nunca llama
+      # simulate_delay(), el delay real ocurre dentro de app/core.py de
+      # cada microservicio (ver sus propios bloques en este archivo). Cada
+      # llamada HTTP del flow ya incluye ese delay del lado del servicio.
       # Esto es lo que hace que cada @flow/@task reporte sus estados al
       # servidor real de Prefect (y por lo tanto aparezcan en :4200).
       - PREFECT_API_URL=http://prefect-server:4200/api
+      - AUDIT_DATABASE_URL=${AUDIT_DATABASE_URL}
     depends_on:
       - event-bus
       - prefect-server
@@ -121,6 +183,7 @@ services:
   frontend:
     build:
       context: ./frontend
+    restart: unless-stopped
     ports:
       - "5173:5173"
     environment:
@@ -130,3 +193,4 @@ services:
 
 volumes:
   prefect-data:
+  event-bus-data:
